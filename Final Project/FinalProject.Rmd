@@ -1,0 +1,1201 @@
+---
+title: '&nbsp;'
+output:
+  html_document:
+    code_folding: "hide"
+  pdf_document: default
+  html_notebook: default
+---
+
+![](Uniroma1.png)
+
+<br>
+
+##### **Author:** *Giovanni Giunta*
+##### **Matricola:** *1177327*
+##### **Subject:** *Statistical Methods for Data Science - II*
+##### **Course:** *Data Science*
+##### **University:** *La Sapienza University of Rome*
+
+<br>
+
+## **A probit model for Credit Scoring**
+
+<br>
+
+The goal of this project is to provide an in-depth fully Bayesian analysis to evaluate the explanatory variables underlying the event of Default observed in a sample of Bank customers.
+
+To do so, we make use of a probit model developed using both the frequentist and the Bayesian approach. We start with the frequentist approach: its results will then serve as a baseline to compare with several different models developed using the Bayesian approach. We will use these comparisons to assess how accurately each of the proposed methods predict the Default state among bank customers.
+
+<br>
+
+### 1 Data Processing
+
+<br>
+
+
+Our data is contained in the *Credit.RData* file attached to this submission. Below we provide an example of the available information for each customer:
+
+
+```{r}
+
+load("C:/Users/giogi/Data Science/Statistical Methods in Data Science - Part II/Final Project/Credit.RData")
+
+Sys.setenv(JAGS_HOME="C:\\Program Files\\JAGS\\JAGS-4.3.0")
+
+options(warn=-1)
+
+suppressMessages(library(mvtnorm))
+suppressMessages(library(truncnorm))
+suppressMessages(library(LaplacesDemon))
+suppressMessages(library(R2jags))
+suppressMessages(library(caret))
+suppressMessages(library(kableExtra))
+suppressMessages(library(plotrix))
+suppressMessages(library(dplyr))
+suppressMessages(library(TeachingDemos))
+suppressMessages(library(corrplot))
+
+set.seed(123)
+
+kable(head(Credit), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+In short, we have 8 types of information for each customer:
+
+- **Default** = equal to 1 if the client has faced default, otherwise 0;
+- **BAccount** = has three possible values, depending on the "quality" of the client's bank account in relation to its credit situation: "bad_running", "good_running" and "no" (the latter in the case of no available data)
+- **Months** = duration of the observed loan in months
+- **Past** = has two possible values, depending on whether the customer has ever been reported as a "bad_payer". If not, it goes with "good_payer"
+- **Use** = has two possible values, depending on whether the loan has been taken for "private" or "professional" use;
+- **DM** = the size of the observed loan in Euro;
+- **Gender** = has two possible values, depending on whether the customer is a "male" or a "female"
+- **Status** = has two possible values, depending on whether the customer is "single" or "no_single" (in a relationship). 
+
+Since some of the variables are of qualitative type, we do some data processing and generate the variables we will be working with from now on. All together, we end up with having a total of 10 variables to be used in "R" for our model:
+
+
+```{r}
+
+Default <- Credit$Default
+BA_good <- ifelse(Credit$BAccount=="good_running",1,0)
+BA_bad <- ifelse(Credit$BAccount=="bad_running",1,0)
+BA_nodata <- ifelse(Credit$BAccount=="no",1,0)
+Months <- Credit$Months 
+Good_payer <- ifelse(Credit$Past=="good_payer",1,0)
+Professional_use <- ifelse(Credit$Use=="professional",1,0)
+DM <- Credit$DM
+Gender_male <- ifelse(Credit$Gender=="M",1,0)
+Status_single <- ifelse(Credit$Status=="single",1,0)
+
+```
+
+
+Eventually, we put these variables inside a Dataframe and split the result into a training set (70% of the available data) and a test set (the remaining 30%). Note that we also set an initial value for the intercepts equal to 1.
+
+```{r}
+
+Intercept <- rep(1,dim(Credit)[1])  # create a vector of intercepts, each element = 1
+dataset <- cbind(Intercept,BA_good,BA_nodata,Months,Good_payer,Professional_use,DM,Gender_male,Status_single,Default)
+data_sample <- sample(c(TRUE, FALSE), nrow(dataset), replace=TRUE, prob=c(0.7,0.3))
+temp_train_set <- dataset[data_sample, ]
+temp_test_set <- dataset[!data_sample, ]
+train_default <- temp_train_set[,colnames(temp_train_set)=="Default"]
+train_set <- temp_train_set[,colnames(temp_train_set)!="Default"]
+test_default <- temp_test_set[,colnames(temp_test_set)=="Default"]
+test_set <- temp_test_set[,colnames(temp_test_set)!="Default"]
+
+```
+
+
+<br>
+
+### 2 Exploratory Data Analysis
+
+<br>
+
+
+We will now conduct an exploratory data analysis over our data, in order to measure the influence that each explanatory variable has over the response variable.
+First, we observe that out of a $1000$ bank customers, $30$% are in a  default state:
+
+
+```{r}
+
+kable(table(Default), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+
+From the conditional distribution of being in a Default state given that the customer is in a good running position with its own bank account, we can see that only $12$% of the clients meeting such criteria actually go into a default situation.
+
+
+```{r}
+
+kable(prop.table(table(BA_good,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+
+On the other hand, such percentage raises to $36$% when the bank account is considered in bad running. Note that we cannot read such information from the previous table: we have to use a different one so to exclude the records with no available data.
+
+
+```{r}
+
+kable(prop.table(table(BA_bad,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+
+By means of boxplots, we can show how customers owning loans with a higher duration in months have a slightly higher chance of falling into a default state (notice the position of the median level of each boxplot).
+
+
+```{r}
+
+boxplot(Months~Default)
+
+```
+
+
+When observing the conditional distribution of Defaults given the condition of being a good payer, we see more notable results; in fact, of those who are labelled as bad payers, $60$% have fallen again into Default, against only 27% of those who used to be good payers (we say "used" to be good payers, as they are now unfortunately in a situation of Default):
+
+
+```{r}
+
+kable(prop.table(table(Good_payer,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+
+With respect to the use type of the loan, that is, whether it is for professional use or private use, we observe that those who access loans for professional use are more likely to get into Default ($37$%) than those who make private use of them ($26$%):
+
+
+```{r}
+
+kable(prop.table(table(Professional_use,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+
+Quite surprisingly, the variable measuring the amount of money borrowed by the client doesn't show a median value significantly higher among those who ended up in a default state. It seems like the amount of money involved does not influence much the possibility of not being able to repay the debt.
+
+
+```{r}
+
+boxplot(DM~Default)
+
+```
+
+As per the gender variable, we can see how men are more likely to default ($36$%) then women ($27$%):
+
+```{r}
+
+kable(prop.table(table(Gender_male,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+We conclude by observing that $36$% of singles couldn't repay their debts, against $27$% of those in a relationship:
+
+
+```{r}
+
+kable(prop.table(table(Status_single,Default),1), digits = 2) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F)
+
+```
+
+The previous analysis, however, does not take into account the fact that some of these variables might actually be redundant and not really explain the Default event. This might be the case when a specific variable is not really informative, because all the relevant information is provided by another variable. To dig a little bit deeper into this problematic, let's plot a correlation matrix to seek for correlation among our explanatory variables:
+
+```{r}
+
+labels <- c(
+  "BA_good",
+  "BA_nodata",
+  "Months",
+  "Good_payer",
+  "Professional_use",
+  "DM",
+  "Gender_male",
+  "Status_single"
+)
+
+data <- cbind(
+  BA_good,
+  BA_nodata,
+  Months,
+  Good_payer,
+  Professional_use,
+  DM,
+  Gender_male,
+  Status_single
+)
+
+cor_matrix <- cor(data)
+colnames(cor_matrix) <- labels
+rownames(cor_matrix) <- labels
+corrplot(cor_matrix, method = "number")
+
+```
+
+
+From the above correlation matrix it looks evident how there is a high positive linear correlation between the duration of the loan and its amount in Euro. This result comes with no surprise, in fact as we increase the time we have at our disposal to pay back the money to the bank, the more interests will be added to our overall debt. We also observe a strong negative linear correlation between being a male and being single, showing that, in our data sample, men are less likely to be in a relationship than women. The correlation coefficient between these mentioned pairs of variables quantifies their strong linear relationship: if we use both in our regression model, only one will be informative, the other one will not make any contribution and will therefore be redundant.
+
+<br>
+
+### 3 Probit model (Frequentist approach)
+
+<br>
+
+
+Given the dicotomic nature of the variable of interest, I chose to implement a generalized linear model with a link probit function. We start by presenting the probit model developed in accordance to the frequentist approach, with the goal of using its results as a term of comparison for the subsequent Bayesian approaches that will be explored in the following chapters.
+
+
+Let's consider the dicotomic response variable $Y \in \{0,1\}$ and $X \in \mathbb{R}^p$ the vector of explanatory variables. We assume all the variables to be independent from each other. We also indicate as our data $(y_{i},\boldsymbol{x}_{i})$, $i=1,...,n$ and $Y_i \sim Bern(\pi_i)$, $i=1,...,n$ as the distribution function of our response variable.
+
+
+That being said, we now aim at modelling the probability of success of the dicotomic variable $Y$ as a function of the vector of explanatory variables $X$ by means of a probit model, with the following formulation:
+
+\begin{equation}
+
+\pi_i = \mathbb{P}(y_{i}=1|x_{i}) = \Phi(\boldsymbol{x}_i^T\boldsymbol{\beta}) \\
+\mathbb{P}(y_{i}=0|x_{i}) = 1 - \Phi(\boldsymbol{x}_i^T\boldsymbol{\beta})
+
+\end{equation}
+
+where $\Phi(\cdot)$ represents the CDF of a standard normal and $\boldsymbol{\beta} \in \mathbb{R}^{p}$ represents the vector of all the coefficients of the model.
+
+Under the hypothesis of independence we can derive the likelihood function as follows:
+
+\begin{equation}
+
+L(\boldsymbol{\beta};\boldsymbol{y}_i,\boldsymbol{x}_i) =
+\prod_{\substack{i=1}}^{n}
+\Phi(\boldsymbol{x}_i^T\boldsymbol{\beta})^{y_i}(1-\Phi(\boldsymbol{x}_i^T\boldsymbol{\beta}))^{1 - y_i}
+
+\end{equation}
+
+By using the glm function it is possible to estimate the MLE and then the probit model:
+
+```{r}
+
+glm_data = as.data.frame(train_set)
+
+op <- glm(train_default~.-Intercept,data=glm_data,family=binomial(link="probit"))
+
+options(scipen=999)
+
+F_beta.hat <- op$coefficients
+
+kable(summary(op)$coefficients) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+
+As anticipated in the EDA paragraph, from the summary above it looks like the size of the loan (DM) is not really explanatory, whilst the duration should be the informative variable to keep in our model, given that it is positively correlated to the size. 
+Also the gender of the customers does not seem to be relevant nor informative, probably because of its correlation with the relationship status variable.
+
+<br>
+
+### 4 Probit model (Bayesian approach)
+
+<br>
+
+
+We are now going to estimate a probit model according to the Bayesian approach. The fundamental ingredients to achieve our goal are:
+
+\begin{equation}
+
+Y_i \sim
+Bern(\Phi(\boldsymbol{x}_i^T\boldsymbol{\beta})), \;\;i=1,...,n
+
+\end{equation}
+
+\begin{equation}
+
+\boldsymbol{\beta} \sim
+\pi(\boldsymbol{\beta})
+
+\end{equation}
+
+In this case we have no conjugate prior, therefore we need to make use of a Gibbs sampler to estimate the posterior distribution. I am now going to propose three different approaches for the implementation of the probit model within the Bayesian approach:
+
+<br>
+
+#### 4a) First approach
+
+The theory used for this approach has been taken from the following [article](https://www.tandfonline.com/doi/pdf/10.1080/01621459.1993.10476321?needAccess=true), page 4.
+We will follow the same idea that is at the basis of the corresponding frequentist model: we assume the existence of a latent variable $Y^*$ which then gets regressed linearly over the vector of covariates so to obtain the classical linear model with normal error. More in detail, we have:
+
+
+\begin{equation}
+
+Y_i^*: Y_i = \begin{cases} 1 & \ if\ \; Y_i^* \geq 0\\ 0 & \ if\ \; Y_i^* <0 \end{cases} \\
+
+Y_i^* = \boldsymbol{x}_i^T\boldsymbol{\beta} + \epsilon_i \\
+
+\epsilon_i \sim N(0,1)
+
+\end{equation}
+
+So $Y^*$ is our latent variable, the one that, whenever its value is greater than $0$, will make us observe the value of the response $Y$.
+So we get:
+
+\begin{equation}
+
+Y^*|\boldsymbol{\beta},X \sim N(X\boldsymbol{\beta},I)
+
+\end{equation}
+
+Therefore, we can write:
+
+\begin{equation}
+
+ f(y|y^*) = \mathbb{I}(y=1)\cdot\mathbb{I}(y^* \geq 0) + \mathbb{I}(y=0)\cdot\mathbb{I}(y^*<0)
+
+\end{equation}
+
+At this point, we can define our probit model as follows:
+
+\begin{equation}
+
+\mathbb{P}[Y_i = 1|\boldsymbol{x}_i,\boldsymbol{\beta}] \\ 
+= \mathbb{P}[Y^*_i \geq 0|\boldsymbol{x}_i,\boldsymbol{\beta}] \\ 
+= \mathbb{P}[\boldsymbol{x}_i^T\boldsymbol{\beta} + \epsilon_i \geq 0|\boldsymbol{x}_i,\boldsymbol{\beta}] \\ 
+= \mathbb{P}[\epsilon_i \geq -\boldsymbol{x}_i^T\boldsymbol{\beta}|\boldsymbol{x}_i,\boldsymbol{\beta}] \\ 
+= 1 - \Phi(-\boldsymbol{x}_i^T\boldsymbol{\beta}) \\ 
+= \Phi(\boldsymbol{x}_i^T\boldsymbol{\beta})
+
+\end{equation}
+
+The posterior distribution corresponds to the joint distribution of $Y^*$ and $\beta$ conditioned on the observed data $Y,X$:
+
+\begin{equation}
+
+\pi(\boldsymbol{\beta},\boldsymbol{y}^*|\boldsymbol{y},X)
+
+\end{equation}
+
+To implement the Gibbs sampler we need the two full-conditionals:
+
+\begin{equation}
+
+\pi(\boldsymbol{\beta}|\boldsymbol{y}^*,\boldsymbol{y},X)
+
+\end{equation}
+
+\begin{equation}
+
+\pi(\boldsymbol{y}^*|\boldsymbol{\beta},\boldsymbol{y},X)
+
+\end{equation}
+
+
+To get the first full-conditional we can proceed as follows:
+
+\begin{equation}
+
+\pi(\boldsymbol{\beta}|\boldsymbol{y}^*,\boldsymbol{y},X) = \pi(\boldsymbol{\beta}|\boldsymbol{y}^*,X) \propto  \pi(\boldsymbol{\beta})\prod_{\substack{i=1}}^{n}\phi(y_i^* - \boldsymbol{x}_i^T\boldsymbol{\beta}) \\
+
+\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_0,\Sigma_0)
+
+\end{equation}
+
+From which we get:
+
+\begin{equation}
+
+\boldsymbol{\beta}|\boldsymbol{y}^*,X \sim N(\boldsymbol{\mu}_p,\Sigma_p)
+
+\end{equation}
+
+Where:
+
+\begin{equation}
+
+\boldsymbol{\mu}_p = \Sigma_p(\Sigma_0^{-1}\boldsymbol{\mu}_0 + X^T\boldsymbol{y}^*) \\
+
+\Sigma_p = (\Sigma_0^{-1} + X^TX)^{-1}
+
+\end{equation}
+
+The second full-conditional simply corresponds to a truncate normal distribution:
+
+\begin{equation}
+
+Y^*|\boldsymbol{\beta},y,X \sim \begin{cases} TN(\boldsymbol{x}^T\boldsymbol{\beta},1,0,+\infty) & \ if\ \; y = 1\\ TN(\boldsymbol{x}^T\boldsymbol{\beta},1,-\infty,0) & \ if\ \; y = 0 \end{cases}
+
+\end{equation}
+
+
+```{r}
+
+X <- train_set
+y <- train_default
+n <- dim(X)[1]  # number of customers
+p <- dim(X)[2]  # number of coefficients ( = number of explanatory variables + intercept)
+n1 <- sum(y)    # number of customers in default
+n0 <- n - n1    # number of customers not in default
+
+```
+
+
+At each iteration of the following Gibbs algorithm we first sample from $\boldsymbol{\beta}|y^*,X$, and then from $Y_i^*|\boldsymbol{\beta},y_i,\boldsymbol{x}_i$.
+
+
+```{r}
+
+n_sim1 <- 10000
+burn_in1 <- 5000
+
+Sigma_0 <- diag(100,p)  # initialize a diagonal matrix for sigma, with elements on the diagonal = 100
+beta_0 <- rep(0,p)    # starting values for beta = 0
+beta_chain_1 <- matrix(0,nrow=n_sim1,ncol=p)  # (n_sim1 x p) matrix, starts with all elements = 0 
+beta_chain_1[1,] <- beta_0    # first row of the matrix = beta_0
+y_star <- rep(0,n)
+invSigma_0 <- solve(Sigma_0)
+Sigma_p <- solve(invSigma_0 + t(X)%*%X)   # compute the matrix multiplication between X and the transpose of X, which is t(X). Eventually, add the result to the inverse of sigma_o, and solve
+
+for(t in 1:(n_sim1 - 1)){
+  
+  mu_y_star <- X %*% beta_chain_1[t,]   # for each i, i = 1,...,10000, get the mu_y_star
+  y_star[y == 0] <- rtruncnorm(n0, mean = mu_y_star[y == 0], sd = 1, a = -Inf, b = 0)   # update the values for all the elements in y_star corresponding to NON default (y == 0) by drawing from the left (negative) part of a standard gaussian
+  y_star[y == 1] <- rtruncnorm(n1, mean = mu_y_star[y == 1], sd = 1, a = 0, b = Inf)
+  mu_p <- Sigma_p %*% (invSigma_0 %*% beta_0 + t(X)%*%y_star)
+  beta_chain_1[t+1,] <- c(rmvnorm(1, mu_p, Sigma_p))
+}
+
+B_beta.hat_1 <- apply(beta_chain_1[-(1:burn_in1),],2,mean)
+
+names(B_beta.hat_1) <- c(
+  "Intercept",
+  "BA_good",
+  "BA_nodata",
+  "Months",
+  "Good_payer",
+  "Professional_use",
+  "DM",
+  "Gender_male",
+  "Status_single"
+)
+
+kable(cbind(F_beta.hat, B_beta.hat_1)) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+
+We can see how this first approach returns very similar results as the ones provided by the frequentist model of the previous section. But we want to go even further, and try to improve this first Bayesian approach even more.
+
+
+#### 4b) Second approach
+
+According to this [article](https://projecteuclid.org/journals/bayesian-analysis/volume-1/issue-1/Bayesian-auxiliary-variable-models-for-binary-and-multinomial-regression/10.1214/06-BA105.full), pp. 3,4, it looks like the previous model might be affected by a strong correlation between the parameters $Y^*$ and $\beta$, which might be having a negative impact over the performance of the algorithm we just used. Following the indications provided in the mentioned article, we will now try to achieve even better results.
+
+First, we can observe that it is possible to decompose:
+
+\begin{equation}
+
+\pi(\boldsymbol{\beta},\boldsymbol{y}^*|\boldsymbol{y},X) =
+\pi(\boldsymbol{\beta}|\boldsymbol{y}^*,X)\pi(\boldsymbol{y}^*|\boldsymbol{y},X)
+
+\end{equation}
+
+In this case $\pi(\boldsymbol{\beta}|\boldsymbol{y}^*,X)$ is the same as before, whilst $\pi(\boldsymbol{y}^*|\boldsymbol{y},X)$ can be defined as:
+
+
+\begin{equation}
+
+\pi(\boldsymbol{y}^*|\boldsymbol{y},X) =
+\int\pi(\boldsymbol{y}^*|\boldsymbol{\beta},X)\pi(\boldsymbol{\beta})d\boldsymbol{\beta}
+\, \cdot \, f(\boldsymbol{y}|X,\boldsymbol{y}^*)
+
+\end{equation}
+
+By assuming $\boldsymbol{\beta} \sim N(\boldsymbol{0},\Sigma_0)$ we get:
+
+\begin{equation}
+
+Y^*|\boldsymbol{y},X \sim TN(\boldsymbol{0},(I + X^T\Sigma_0X),A_y)
+
+\end{equation}
+
+Which is a truncated normal distribution within the set defined by $A_y$. To sample from the second full-conditional we can proceed as follows:
+
+\begin{equation}
+
+y_i^*|\boldsymbol{y}_{-i}^*,y_i,\boldsymbol{x}_i
+\sim \begin{cases} TN(m_i,v_i,0,+\infty) & \ if\ \; y_i = 1\\
+TN(m_i,v_i,-\infty,0) & \ if\ \; y_i = 0 \end{cases}
+
+\end{equation}
+
+Where the parameters $m_i$ and $v_i$ are obtained from the equations below:
+
+\begin{equation}
+
+m_i = x_{i}\boldsymbol{\mu}_p - w_i(z_i - x_{i}\boldsymbol{\mu}_p) \\
+
+v_i = 1+w_i \\
+
+w_i = \frac{h_i}{1-h_i} \\
+
+h_i = \{X^T\Sigma_pX\}_{ii}
+
+\end{equation}
+
+After having updated the value for $z_i$ we need to recalculate the posterior mean as follows:
+
+\begin{equation}
+
+\boldsymbol{\mu}_p = \boldsymbol{\mu}_p^{old} + \boldsymbol{S}_i(z_i-z_i^{old})
+
+\end{equation}
+
+Where $\boldsymbol{\mu}_p^{old}$ and $z_i^{old}$ represent the values for $\boldsymbol{\mu}_p$ and $z_i$ before the update of $z_i$, while $\boldsymbol{S}_i$ represents the i-th column of $\Sigma_pX^T$.
+
+We are now ready to test all the theory presented above:
+
+```{r}
+
+n_sim2 <- 10000
+burn_in2 <- 3000
+
+S <- Sigma_p%*%t(X)
+h <- vector(mode = "numeric", length = n)
+w <- vector(mode = "numeric", length = n)
+v <- vector(mode = "numeric", length = n)
+
+for (i in 1:n){
+  h[i] <- X[i,]%*%S[,i]
+  w[i] <- h[i]/(1-h[i])
+  v[i] <- w[i]+1
+}
+
+y_star[y == 0] <- rtruncnorm(n0, mean = 0, sd = 1, a = -Inf, b = 0)
+y_star[y == 1] <- rtruncnorm(n1, mean = 0, sd = 1, a = 0, b = Inf)
+
+beta_chain_2 <- matrix(0, nrow = n_sim2, ncol = p)
+
+mu_p <- as.vector(S %*% y_star)
+
+for(t in 1:(n_sim2 - 1)){
+  for(i in 1:n){  # number of customers
+    
+    y_star_old <- y_star[i]
+
+    m <- X[i,]%*%mu_p
+    m <- m - w[i]*(y_star[i]-m)
+    
+    if (y[i] == 0)
+      y_star[i] <- rtruncnorm(1, mean = m, sd = v[i], a = -Inf, b = 0)
+    else
+      y_star[i] <- rtruncnorm(1, mean = m, sd = v[i], a = 0, b = Inf)
+    mu_p <- as.vector(mu_p + (y_star[i] - y_star_old)%*%S[,i])
+  }
+  beta_chain_2[t+1,] <- c(rmvnorm(1, mu_p, Sigma_p))
+}
+
+B_beta.hat_2 <- apply(beta_chain_2[-(1:burn_in2),],2,mean)
+
+names(B_beta.hat_2) <- c(
+  "Intercept",
+  "BA_good",
+  "BA_nodata",
+  "Months",
+  "Good_payer",
+  "Professional_use",
+  "DM",
+  "Gender_male",
+  "Status_single"
+)
+
+kable(cbind(F_beta.hat, B_beta.hat_2)) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+Despite being quite close to those returned by the frequentist approach, these results are not very dissimilar from those achieved by means of the first Bayesian model. Furthermore, the algorithm we implemented was not efficient at all.
+
+
+#### 4c) Model estimation using JAGS
+
+
+We now make use of JAGS to perform one last estimation. JAGS (Just Another Gibbs Sampler) is a famous software for analysis of Bayesian hierarchical models using MCMC simulations.
+The model is formulated as follows:
+
+\begin{equation}
+
+Y_i \sim Bern(\pi_i) \;\;i = 1,...,n \\
+\pi_i = \Phi(\eta_i) \;\;i = 1,...,n \\
+\eta_i = \boldsymbol{x}_i^T\boldsymbol{\beta} \;\;i = 1,...,n \\
+\beta_j \sim N(0,0.001) \;\;j = 1,...,p
+
+\end{equation}
+
+And below is its implementation in R:
+
+```{r}
+
+data <- data.frame(y,X[,-Intercept])
+datjags <- as.list(data)
+datjags$N <- n
+
+n_chains <- 2
+n_iter <- 20000
+n_burnin <- 5000
+
+model <- function() {
+  for(i in 1:N) {
+    
+    y[i] ~ dbern(p[i]) 
+    probit(p[i]) <- eta[i]  
+    
+    eta[i] <- beta[1] + 
+              beta[2]*BA_good[i] + 
+              beta[3]*BA_nodata[i] +
+              beta[4]*Months[i] + 
+              beta[5]*Good_payer[i] + 
+              beta[6]*Professional_use[i] + 
+              beta[7]*DM[i] + 
+              beta[8]*Gender_male[i] + 
+              beta[9]*Status_single[i]
+  }
+  
+  for(j in 1:9){
+    beta[j] ~ dnorm(0, 0.001) 
+  }
+  
+}
+
+params <- c("beta")
+inits1 <- list("beta" = rep(0, 9))
+inits2 <- list("beta" = rep(0, 9))
+inits <- list(inits1, inits2)
+
+set.seed(123)
+
+jags_probit <- R2jags::jags(
+                            data = datjags, 
+                            inits = inits,
+                            parameters.to.save = params, 
+                            n.chains = n_chains, 
+                            n.iter = n_iter, 
+                            n.burnin = n_burnin, 
+                            model.file = model)
+
+#jags_probit
+
+chainArray <- jags_probit$BUGSoutput$sims.array
+
+#apply(chainArray[-n_burnin,1,-10],2,mean)
+#apply(chainArray[-n_burnin,2,-10],2,mean)
+
+B_beta.hat.jags <- apply(chainArray[-n_burnin,1,-10],2,mean)
+
+names(B_beta.hat.jags) <- c(
+  "Intercept",
+  "BA_good",
+  "BA_nodata",
+  "Months",
+  "Good_payer",
+  "Professional_use",
+  "DM",
+  "Gender_male",
+  "Status_single"
+)
+
+kable(cbind(F_beta.hat, B_beta.hat_1, B_beta.hat_2, B_beta.hat.jags)) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+
+It looks like each of the proposed model, including JAGS, is returning values that are very close to those returned by the frequentist model, and it turns out there is no apparent winner so far (even though it is worth mentioning the clear inefficiency of the second Bayesian approach in terms of speed). We need to do some more analysis before coming to conclusions.
+
+
+<br>
+
+
+### 5 Standard Error Comparison
+
+<br>
+
+The standard error of each chain measures the discrepancy between the true unknown value and our estimated posterior mean, and it is calculated by taking into account the correlation between each realization. Below we show the standard error of each of the three Bayesian implementations we have presented in the previous chapter, to check which one performed better:
+
+
+```{r}
+
+std_1 <- numeric()
+
+for(k in 1:length(B_beta.hat_1)){
+  std_1[k] <- sqrt(LaplacesDemon::MCSE(beta_chain_1[,k][-(1:burn_in1)]))
+}
+
+std_2 <- numeric()
+
+for(k in 1:length(B_beta.hat_2)){
+  std_2[k] <- sqrt(LaplacesDemon::MCSE(beta_chain_2[,k][-(1:burn_in2)]))
+}
+
+std_jags <- numeric()
+
+for(k in 1:length(B_beta.hat.jags)){
+  std_jags[k] <- sqrt(LaplacesDemon::MCSE(chainArray[-n_burnin,1,-10][,k]))
+}
+
+output <- cbind(std_1,std_2,std_jags)
+
+kable(output) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+We can conclude that the second Bayesian approach is the model with the smaller standard error.
+
+
+<br>
+
+### 6 Diagnostic Checking
+
+<br>
+
+To perform some diagnostic checking, we show the empirical distribution of the simulated Markov Chains for each of the nine coefficients. We can observe how, for all of them, the empirical distribution is nicely approximated by a Gaussian distribution centered around its estimated posterior mean (you can notice from the code below that we are not taking into account the data related to the burn-in iterations).
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_1)){
+  hist(beta_chain_1[,k],prob = T,
+       main = substitute(paste("Empirical distribution of ",
+                               beta[h]),
+                         list(h=c(1:length(B_beta.hat_1))[k])),
+       xlab = substitute(beta[h],
+                         list(h=c(1:length(B_beta.hat_1))[k])))
+  lines(density(beta_chain_1[,k][-(1:burn_in1)]),lwd = 2)
+  abline(v = B_beta.hat_1[k],col = "orange",lwd = 2)
+}
+
+title("First Bayesian approach", line = -33, adj = 0.85, cex.main = 1.5, outer = TRUE)
+
+```
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_2)){
+  hist(beta_chain_2[,k][-(1:burn_in2)],prob = T,
+       main = substitute(paste("Empirical distribution of ",
+                               beta[h]),
+                         list(h=c(1:length(B_beta.hat_2))[k])),
+       xlab = substitute(beta[h],
+                         list(h=c(1:length(B_beta.hat_2))[k])))
+  lines(density(beta_chain_2[,k][-(1:burn_in2)]),lwd = 2)
+  abline(v = B_beta.hat_2[k],col = "orange",lwd = 2)
+}
+
+title("Second Bayesian approach", line = -33, adj = 0.9, cex.main = 1.5, outer = TRUE)
+
+```
+
+To check if the Markov Chains have reached their stationary region, we now plot the path for each chain. We can observe how, step after step, they remain within the same region for the entire duration of the simulation. It is clearly visible how each simulation fluctuates very little around its estimated posterior mean.
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_1)){
+  plot(beta_chain_1[,k],type = "l",
+       main = substitute(paste("Simulation path for chain # ",h)
+                         ,list(h=c(1:length(B_beta.hat_1))[k])),ylab = "")
+}
+
+title("First Bayesian approach", line = -33, adj = 0.85, cex.main = 1.5, outer = TRUE)
+
+```
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_2)){
+  plot(beta_chain_2[,k],type = "l",
+       main = substitute(paste("Simulation path for chain # ",h)
+               ,list(h=c(1:length(B_beta.hat_2))[k])),ylab = "")
+}
+
+title("Second Bayesian approach", line = -33, adj = 0.9, cex.main = 1.5, outer = TRUE)
+
+```
+
+
+To evaluate the reliability of the simulations we plot the autocorrelogram of the realizations: we notice that no significant correlation is found, and this clearly has a good impact on the error estimation of the model.
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_1)){
+  acf(beta_chain_1[,k],
+      main = substitute(beta[h]
+                        ,list(h=c(1:length(B_beta.hat_1))[k])))
+}
+
+title("First Bayesian approach", line = -33, adj = 0.85, cex.main = 1.5, outer = TRUE)
+
+```
+
+
+```{r}
+
+layout(matrix(c(1,2,3,4,5,6,7,8,9,0), 5, 2, byrow = TRUE))
+
+par(mar=c(3, 2, 1.5, 0.5))
+
+for(k in 1:length(B_beta.hat_2)){
+  acf(beta_chain_2[,k],
+      main = substitute(beta[h]
+                        ,list(h=c(1:length(B_beta.hat_2))[k])))
+}
+
+title("Second Bayesian approach", line = -33, adj = 0.9, cex.main = 1.5, outer = TRUE)
+
+```
+
+
+For the third implementation, the one developed with the aim of JAGS, we can estimate the number of iterations needed to reach a certain level of precision. To do so, we can use the Raftery-Lewis diagnostic:
+
+
+```{r}
+
+fit <- coda::as.mcmc(jags_probit)
+
+raftery.diag(fit)
+
+```
+
+
+We can also perform the Heidelberg-Welch diagnostic, which tests the null hypothesis (with p-value $0.05$) that the sampled values come from a stationary distribution. Along with it we also get the half-width test, which calculates half the width of the $(1 - \alpha)$% credible interval around the mean. If the ratio between the half-width and the mean is lower than some $\epsilon$ (with chosen value $0.01$), then the chain passes the test. Otherwise the length of the sample is reported not to be long enough to estimate the mean with sufficient accuracy.
+
+
+```{r}
+
+heidel.diag(fit)
+
+```
+
+
+One last test we can perform in order to assess whether we have converged to the target distribution, and hence to understand whether we can can confirm stationarity, is the Geweke convergence diagnostic. 
+
+The Geweke diagnostic works in a pretty simple way: it compares the mean of some samples drawn from the end of the MCMC with the mean of some other samples drawn from the beginning of the MCMC, and then checks for convergence.
+
+Given that all the plots below show a z-score that falls within the acceptance region (that is: $(-2,2)$), we conclude that the convergence hypothesis cannot be rejected at a significance threshold of $5$%.
+
+
+```{r}
+
+geweke.plot(fit)
+
+```
+
+<br>
+
+### 7 Bayesian Analysis
+
+<br>
+
+We already mentioned during the EDA chapter that some variables, more specifically the gender of the customer and the size in euro of the loan, might not be really explanatory of the event of Default. The frequentist analysis we ran in chapter 3 seemed to be in accordance with such hypothesis. Let's now check if our theory holds also according to a Bayesian type of analysis. For this purpose, we are going to consider the data returned by the MCMC of the JAGS Bayesian model.
+
+Given that the estimated posterior distribution of each single coefficient is approximately normal, the "equal tail" and the "highest posterior density" credible intervals are going to return very close results. Therefore we are simply going to use an ET credible interval, rather than both.
+
+
+```{r}
+
+cred <- 0.95
+
+IC.et <- apply(chainArray[-5000,2,-10], 2, quantile, 
+                   prob=c((1-cred)/2, 1-(1-cred)/2))
+
+plotCI(x = c(1:length(B_beta.hat.jags)),
+       y = B_beta.hat.jags,li = IC.et[1,],ui = IC.et[2,],
+       main = "ET credible interval",ylab = "",xlab = "",pch = 20)
+
+abline(h = 0)
+
+text(c(1:length(B_beta.hat.jags)),B_beta.hat.jags,
+     names(B_beta.hat.jags),cex=0.65, pos=3,col="red") 
+
+```
+
+
+The plot above shows that the intervals related to the gender of the customer and the status of the relationship are not really meaningful, given that their respective intervals cross the line at $0$. Same goes for the size of the loan, which lies right on top of the $0$ line. 
+In practice, we do not want to take into consideration variables that have a $95$% chance of having $0$ as one of their possible true values. It is worth mentioning that also the Intercept is affected by this issue; however, after removing the gender and the size of the loan from the model, the Intercept revealed to be significant (as we will show in the next chapter).  
+Therefore, in accordance with the conclusions drawn from the frequentist analysis, we choose to drop the "Gender_male" and the "DM" variables, so to be able, in the next chapter, to develop an alternative probit model that only takes into account relevant variables. 
+
+
+<br>
+
+
+### 8 An alternative version of the JAGS Bayesian implementation
+
+<br>
+
+
+We now eliminate the variables related to the size in euro of the loan and the gender of the customers, and check if the performance of the model is positively affected.
+
+
+```{r}
+
+datanew <- data %>% select(c("y","BA_good","BA_nodata","Months","Good_payer",
+                           "Professional_use","Status_single"))
+
+datjagsnew <- as.list(datanew)
+
+datjagsnew$N <- n
+
+model <- function(){
+  for(i in 1:N){
+    y[i] ~ dbern(p[i])  
+    
+    probit(p[i]) <- eta[i]   
+    
+    eta[i] <- beta[1] + 
+              beta[2]*BA_good[i] + 
+              beta[3]*BA_nodata[i] +
+              beta[4]*Months[i] + 
+              beta[5]*Good_payer[i] + 
+              beta[6]*Professional_use[i] + 
+              beta[7]*Status_single[i]
+  }
+  
+  for(j in 1:7){
+    beta[j] ~ dnorm(0, 0.001) 
+  }
+  
+}
+
+params <- c("beta")
+inits1 <- list("beta" = rep(0, 7))
+inits2 <- list("beta" = rep(0, 7))
+inits <- list(inits1, inits2)
+
+set.seed(123)
+
+jags_probit_mod <- R2jags::jags(data = datjagsnew, inits = inits,
+                            parameters.to.save = params, n.chains = 2, 
+                            n.iter = 20000, n.burnin = 5000, model.file = model)
+
+#jags_probit_mod
+
+```
+
+
+```{r}
+
+chainArray_mod <- jags_probit_mod$BUGSoutput$sims.array
+
+B_beta_hat_jags_mod <- apply(chainArray_mod[-5000,1,-8],2,mean)
+names(B_beta_hat_jags_mod) <- c("Intercept","BA_good","BA_nodata","Months","Good_payer",
+                           "Professional_use","Status_single")
+
+std_jags_mod <- numeric()
+
+for(k in 1:length(B_beta_hat_jags_mod)){
+  std_jags_mod[k] <- sqrt(LaplacesDemon::MCSE(chainArray_mod[-5000,1,-8][,k]))
+}
+
+kable(cbind(B_beta_hat_jags_mod, std_jags_mod)) %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+
+We can confirm one more time how the probability of Default is lower whenever the customer has a "good running" and well maintained bank account; vice versa it gets higher whenever such condition does not hold. It is also evident how the chance of entering the Default state becomes more likely as the duration in months of the loan increases. Lastly, we can see how the risk of Default is higher for those customers who are not in a relationship and for those who borrow money for professional use.
+
+Below, we also plot the equal tail credible intervals for the data returned by this new model: as we can see, no coefficient interval lies upon, or crosses, the $0$ line.
+
+
+```{r}
+
+IC.et <- apply(chainArray_mod[-5000,2,-8], 2, quantile, 
+                   prob=c((1-cred)/2, 1-(1-cred)/2))
+
+plotCI(x = c(1:length(B_beta_hat_jags_mod)),
+       y = B_beta_hat_jags_mod,li = IC.et[1,],ui = IC.et[2,],
+       main = "ET credible interval",ylab = "",xlab = "",pch = 20)
+
+abline(h = 0)
+
+text(c(1:length(B_beta_hat_jags_mod)),B_beta_hat_jags_mod,
+     names(B_beta_hat_jags_mod),cex=0.65, pos=3,col="red") 
+
+```
+
+
+<br>
+
+
+### 9 Prediction Performance
+
+<br>
+
+
+Let's now check how our models perform with predicting the event of Default over the Bank customers belonging to the test set. We start with the Frequentist approach:
+
+
+```{r}
+
+test_data = data.frame(test_set)
+
+F_prediction <- predict(op, newdata = test_data, type = "response")
+F_result <- rep(NA, length(F_prediction))
+
+unique_classes <- c(0,1)
+  
+for (i in 1:length(F_prediction)) {
+  set.seed(123)
+  y_pred <- rbinom(n = 100, size = 1, prob = F_prediction[i])
+  
+  # find the element among 0, 1 that has the highest frequency
+  F_result[i] <- unique_classes[which.max(tabulate(match(y_pred, unique_classes)))]    
+}
+
+confusionMatrix(as.factor(F_result), as.factor(test_default), dnn = c("Prediction", "Reference"))
+
+```
+
+
+Here are the results coming from the JAGS Bayesian approach:
+
+
+```{r}
+
+JAGS_predict <- rep(NA, length(test_data$BA_good))
+JAGS_result <- rep(NA, length(JAGS_predict))
+
+for (i in 1:length(test_data$BA_good)) {
+  # jags_probit$BUGSoutput$summary[k,1] = beta[k]
+  
+  logit <- jags_probit$BUGSoutput$summary[1,1] + 
+           jags_probit$BUGSoutput$summary[2,1] * test_data$BA_good[i] + 
+           jags_probit$BUGSoutput$summary[3,1] * test_data$BA_nodata[i] +
+           jags_probit$BUGSoutput$summary[4,1] * test_data$Months[i] +
+           jags_probit$BUGSoutput$summary[5,1] * test_data$Good_payer[i] +
+           jags_probit$BUGSoutput$summary[6,1] * test_data$Professional_use[i] +
+           jags_probit$BUGSoutput$summary[7,1] * test_data$DM[i] +
+           jags_probit$BUGSoutput$summary[8,1] * test_data$Gender_male[i] +
+           jags_probit$BUGSoutput$summary[9,1] * test_data$Status_single[i]
+  
+  probit <- pnorm(logit)
+  
+  JAGS_predict[i] <- probit
+}
+  
+for (i in 1:length(JAGS_predict)) {
+  set.seed(123)
+  y_pred <- rbinom(n = 100, size = 1, prob = JAGS_predict[i])
+  
+  # find the element among 0, 1 that has the highest frequency
+  JAGS_result[i] <- unique_classes[which.max(tabulate(match(y_pred, unique_classes)))]    
+}
+
+confusionMatrix(as.factor(JAGS_result), as.factor(test_default), dnn = c("Prediction", "Reference"))
+
+```
+
+
+And finally the results coming from the alternative JAGS Bayesian implementation:
+
+
+```{r}
+
+JAGS_new_predict <- rep(NA, length(test_data$BA_good))
+JAGS_new_result <- rep(NA, length(JAGS_new_predict))
+
+for (i in 1:length(test_data$BA_good)) {
+  # jags_probit$BUGSoutput$summary[k,1] = beta[k]
+  
+  logit <- jags_probit_mod$BUGSoutput$summary[1,1] + 
+           jags_probit_mod$BUGSoutput$summary[2,1] * test_data$BA_good[i] + 
+           jags_probit_mod$BUGSoutput$summary[3,1] * test_data$BA_nodata[i] +
+           jags_probit_mod$BUGSoutput$summary[4,1] * test_data$Months[i] +
+           jags_probit_mod$BUGSoutput$summary[5,1] * test_data$Good_payer[i] +
+           jags_probit_mod$BUGSoutput$summary[6,1] * test_data$Professional_use[i] +
+           jags_probit_mod$BUGSoutput$summary[7,1] * test_data$Gender_male[i]
+  
+  probit <- pnorm(logit)
+  
+  JAGS_new_predict[i] <- probit
+}
+  
+for (i in 1:length(JAGS_new_predict)) {
+  set.seed(123)
+  y_pred <- rbinom(n = 100, size = 1, prob = JAGS_new_predict[i])
+  
+  # find the element among 0, 1 that has the highest frequency
+  JAGS_new_result[i] <- unique_classes[which.max(tabulate(match(y_pred, unique_classes)))]    
+}
+
+confusionMatrix(as.factor(JAGS_new_result), as.factor(test_default), dnn = c("Prediction", "Reference"))
+
+```
+
+
+Given that the point estimates returned by the Frequentist and the Bayesian approaches are approximately the same, it comes with no surprise that the results returned by each model are practically the same.
+
+In particular, we notice how the performance are not great; in fact, we have a high Type-1 error, meaning that we got a lot of False Positives (approximately $18$%). This is why the Specificity level is low (remember that $Specificity = \frac{TN}{TN + FP}$). However, the Sensitivity has performed quite well (remember that $Sensitivity = \frac{TP}{TP+FN}$).
+
+<br>
+
+### 10 Models Comparison
+
+<br>
+
+
+To perform an analytical comparison between the various models we used so far, we will use the *Akaike information criterion (AIC)* for the generalized linear model and the *Deviance Information Criterion (DIC)* for the MCMC simulations.
+
+Below we present the AIC value returned by the Frequentist probit model and the DIC values returned by the two JAGS Bayesian probit models: 
+
+
+```{r}
+
+print(paste("The AIC for the Frequentist probit model is:", round( AIC(op), 2)) )
+
+print(paste("The DIC for the JAGS Bayesian probit model is:", round(jags_probit$BUGSoutput$DIC, 2)))
+
+print(paste("The DIC for the alternative JAGS Bayesian probit model is:", round(jags_probit_mod$BUGSoutput$DIC ,2)))
+
+```
+
+
+The values observed are quite close to each other, with the only exception of the alternative JAGS Bayesian model, who performed slightly worse (the DIC value is a little higher).
+
+However, the discrepancy is quite small, hence confirming the validity of all the models introduced so far.
+
+
+<br>
+
+
+### 11 Conclusions
+
+
+<br>
+
+All the models presented in this report turned out to be in agreement with each other in terms of parameter estimation, convergence diagnostic and standard error measurements. More in general, there are no significant differences between the performances returned by the Frequentist and the Bayesian approaches that we have implemented. This is also true for all the different Bayesian implementations of the probit model we have discussed, regardless of whether they were developed "manually" (by following the indications provided in different scientific articles) or with the aim of JAGS.
+
+More importantly, all the proposed solutions present the same results in terms of prediction, with a level of accuracy of approximately $73$%: such results might be due to the quality of the dataset in use.
+
+To be able to get better results, it might be advisable to improve the quality and quantity of the data in use, and perhaps to experiment with different types of regression, such as the logistic regression.
+
+<br>
+

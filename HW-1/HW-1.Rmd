@@ -1,0 +1,800 @@
+---
+title: '&nbsp;'
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+
+![](Uniroma1.png)
+
+<br>
+
+##### **Author:** *Giovanni Giunta*
+##### **Matricola:** *1177327*
+##### **Subject:** *Statistical Methods for Data Science - II*
+##### **Course:** *Data Science*
+##### **University:** *La Sapienza University of Rome*
+
+<br>
+
+
+## **Fully Bayesian conjugate analysis of Rome car accidents**
+
+<br>
+
+### 1 Describe your observed data
+
+```{r}
+  
+set.seed(123)
+
+# Load the provided data
+load("homework_1.RData")
+
+# Select the desired subset
+mydata <- subset(roma,subset=sign_up_number==104)
+  
+# check the content within the subset
+str(mydata)
+
+```
+As indicated in the pdf file attached to this Homework, the data file contains detailed information regarding the number of collisions (that will play the part of our $Y_i=y_i$) occurred in Rome in the year of 2016, appropriately catalogued by month, week, day and hour. Conveniently, as requested, we are going to work with only a small subset of 19 *weekdays*. For each of those weekdays, we have its:
+
+* weeknumber
+* weekday
+* hour of collision
+* number of car accidents happened at the given hour
+
+The **sign_up_number** is by choice the same for each record (we extracted all the car accidents with sign_up_number == 104).
+
+The first observation we might make, is that all the extracted car collisions occurred on a Saturday at 9 am (without any further documentation on the provided data, I can only assume that hour = 9 refers to the hour 9 in the morning). 
+Each collision however happened on a different week of the year. 
+In other words, we are inspecting what happened, in terms of car accidents, at the same hour of the same weekday, for a bunch of different weeks of the year 2016. Below is a table with the provided subset:
+
+```{r}
+
+ mydata
+
+```
+
+An interesting observation we can conduct would be to see which weekday is the most dangerous in terms of number of car collisions:
+
+
+```{r}
+
+barplot(height = mydata$car_accidents, names = mydata$week, xlab = "week number", ylab = "# car accidents", main = "Distribution of car accidents for some given weeks of the Year 2016")
+
+```
+
+We can clearly see that on the 7th, the 9th and the 15th Saturday of 2016, 8 car accidents have happened around 9 am.
+Out of the limited data we have, we can say that those days have been the most dangerous. 
+
+Even though it is true that Rome has millions of inhabitants and streets are in terrible conditions, these numbers look suspicious, and the suspect that some outliers might be in our chosen subset is strong.
+
+Other relevant information may be deducted out of the following summary of statistical measures:
+
+```{r}
+summary(mydata)
+```
+If we want to focus specifically on car accidents, we can target directly its summary as follows:
+
+```{r}
+summary(mydata$car_accidents)
+```
+One other important bit of information we might be interested in, could be the standard deviation of collisions happening at the same weekday and hour, but in different weekdays:
+
+```{r}
+sd(mydata$car_accidents)
+```
+<br>
+
+### 2 Justify as best you can your choices for the ingredients of your Bayesian model especially for the choices you make for the prior distribution
+
+<br>
+
+To develop a Bayesian model we need to provide:
+
+* A Likelihood Function
+* A Prior Distribution
+
+The likelihood function represents the joint probability of the observed data $Y_i=y_i$ as a function of the parameters (included in the vector $\theta$) for the chosen statistical model. 
+
+\begin{equation}
+
+L(Y_1 = y_1, ...,Y_n = y_n|\theta)
+
+\end{equation}
+
+Since the data we are using is countable, it makes sense to use a Poisson distribution (as also suggested by the Homework description).
+Hence, following the notation proposed in class, we have:
+
+\begin{equation}
+
+L(Y_1 = y_1, ...,Y_n = y_n|\theta)=c(y_1,...,y_n)\theta^{\sum y_i}e^{-n\theta}
+
+\end{equation}
+
+A prior distribution $\pi(\theta)$ can be defined to express our own degree of belief about the prediction of an outcome, before some evidence is taken into account.
+Gamma distributions are commonly used as prior distributions when we want to deal with parameters that take positive values, $\theta > 0$.
+Moreover, we have studied during the course that Gamma distributions are the proper conjugate prior for the Poisson model.
+Following again the examples provided in class, we can write our prior as:
+
+\begin{equation}
+
+\pi(\theta)=Gamma(s,r)=\frac{r^s}{\Gamma(s)}\theta^{s-1}e^{-r\theta}\\
+
+\end{equation}
+
+Where $s = shape$ and $r = rate$ are the two parameters to be provided to the Gamma distribution. Choosing the right values for these two parameters is going to be crucial for the success of our statistical model: if our prior belief is going to be fundamentally wrong, and far from the truth, we will need to collect massive amount of data to be able to update our model (by means of the likelihood function) and make it correct.
+In the extreme and unrealistic case we provide the model with a prior that is built in a way where we are fundamentally convinced to be "right", then no amount of additional data will produce much changes in the posterior distribution.
+
+How do we choose the appropriate values for the shape and rate of the prior distribution? As stated in the Homework description, "it is known" that the average number of hourly car accidents in Rome during the day is $3.22$. Given that we trust such information, and that all the car accidents in our subset happened at 9 am (hence, during the day), we must find values for $s$ and $r$ such that $E(\theta)$ is equal to $3.22$. In other words:
+
+\begin{equation}
+
+E(\theta) = \mu = \frac{s}{r} = 3.22\\
+
+\end{equation}
+
+Below we create a vector of numbers that divided by their step index give as a result $3.22$:
+
+```{r}
+
+prior_mean = 3.22
+
+number_of_options <- 30
+
+step <- 3
+
+my_indexes <- seq(1, number_of_options, step)
+
+my_vec <- prior_mean * my_indexes
+
+my_vec
+
+```
+For example: $\frac{3.22}{1} = 3.22$, $\frac{12.88}{3} = 3.22$, and so on.
+
+With such data, we can have at our disposal a variety of options to choose from (in total, 10).
+
+Let's plot them all:
+
+
+```{r}
+
+curve(
+      dgamma(x, shape = my_vec[1], rate = my_indexes[1]), 
+      col = 1, 
+      lwd = 3, 
+      xlab = expression(theta), 
+      ylab = expression(pi(theta)), 
+      main = "Candidate Prior Distributions",
+      ylim = c(0, 1.2),
+      from = 0,
+      to = 8
+)
+
+for (i in 2:length(my_vec)){
+  curve(dgamma(x, shape = my_vec[i], rate = my_indexes[i]), add = T, col = i, lwd = 3)
+}
+
+abline(v = prior_mean, col="purple", lwd=3, lty=2)
+
+axis(1, at = prior_mean, labels = prior_mean)
+
+
+```
+
+We can immediately notice that the more we keep increasing the provided values, the more the distribution is concentrated around its mean $\frac{s}{r}$.
+To avoid making our Prior distribution too "informative", we go for $r = 51.52$ and $s = 16$. And here it is:
+
+
+```{r}
+
+prior_shape <- 51.52
+prior_rate <- 16
+
+curve(
+      dgamma(x, shape = prior_shape, rate = prior_rate), 
+      lwd = 3,
+      col = "red",
+      xlab = expression(theta), 
+      ylab = expression(pi(theta)), 
+      main = "Chosen Prior Distributions",
+      ylim = c(0, 0.9),
+      from = 0,
+      to = 8
+)
+
+abline(v = prior_mean, col="green", lwd=3, lty=2)
+
+axis(1, at = prior_mean, labels = prior_mean)
+
+```
+
+<br>
+
+### 3 Report your main inferential findings using your posterior distribution of the unknown parameter in terms of **possible alternative point estimates with comments on how similar they are and, in case, why**
+
+<br>
+
+At this point, we know that we have $\pi(\theta) = Gamma(s = 51.52, r = 16)$, with $\theta$ being a vector of two parameters, shape and rate.
+Using the notions acquired in class, we can easily deduce that the shape and rate of the posterior distribution can be defined as follows:
+
+
+\begin{equation}
+
+\textrm{Posterior Shape} = s^{*} = s + \sum_{i = 1}^{n}{y_i}\\
+
+\textrm{Posterior Rate} = r^{*} = r + n
+
+\end{equation}
+
+With such quantities, we can be able to automatically get any point estimate we might be interested in. So, first we calculate the posterior shape and the posterior mean:
+
+```{r}
+
+posterior_shape <- prior_shape + sum(mydata$car_accidents)
+
+posterior_rate <- prior_rate + length(mydata$car_accidents)
+
+posterior_rate
+posterior_shape
+
+```
+This is sufficient to be able to get interesting point estimates regarding the posterior distribution:
+
+```{r}
+
+posterio_mean <- posterior_shape / posterior_rate
+
+posterior_median <- qgamma(0.5, shape = posterior_shape, rate = posterior_rate)
+
+posterior_mode <- (posterior_shape - 1) / posterior_rate
+
+posterio_mean
+posterior_median
+posterior_mode
+
+```
+It appears that the mean, the mode and the median have values that are very close to each other. This can be easily explained by the fact that the gamma function we get for our posterior distribution is very **symmetrical**.
+
+<br>
+
+### 4 Report your main inferential findings using your posterior distribution of the unknown parameter in terms of **posterior uncertainty**
+
+<br>
+
+As a first step, we can define the Posterior Variance as:
+
+\begin{equation}
+
+\textrm{Posterior Variance} = \psi^{*} = \frac{s^{*}}{r^{*2}} = \frac{\sum_{i = 1}^{n}{y_i}}{(r + n)^{2}}  \\
+
+\end{equation}
+
+
+```{r}
+posterior_variance <- posterior_shape / (posterior_rate^2)
+
+posterior_variance
+```
+
+
+by dividing the square root of the posterior variance by the posterior mean $\mu^{*}$, we can then get the **Posterior Coefficient of Variation**:
+
+\begin{equation}
+
+\textrm{Posterior Coefficient of Variation} = \frac{\sqrt{\psi^{*}}}{{\mu^{*}}} \\
+
+\end{equation}
+
+Such coefficient can be used as a standardized measure of dispersion for a probability distribution.
+
+```{r}
+
+posterior_coefficient_variation <- sqrt(posterior_variance) / posterio_mean
+
+sprintf("%0.1f%%", posterior_coefficient_variation * 100)
+
+```
+With a value of $8.9$% for the Posterior Coefficient of Variation, we can say that the degree of uncertainty for our model is quite small.
+Another way to assess the amount of uncertainty for our posterior distribution is to use **credible intervals**, as we do in our answer to the next question.
+
+<br>
+
+### 5 Report your main inferential findings using your posterior distribution of the unknown parameter in terms of **interval estimates justifying your (possibly best) choices**
+
+<br>
+
+Two techniques we can use to create Bayesian credible intervals are:
+
+* Quantile-Based Intervals
+* Highest Posterior Density Intervals
+
+First, we choose a size for both intervals. The chosen size is 95%.
+
+```{r}
+
+interval_size <- 0.95
+
+interval_bounds <- c( (1 - interval_size) / 2, 1 - (1 - interval_size) / 2)
+
+interval_bounds
+
+```
+
+Then we proceed with the Quantile-Based:
+
+```{r}
+
+qb_interval <- qgamma(interval_bounds, shape = posterior_shape, rate = posterior_rate)
+
+qb_interval
+
+```
+
+Lastly, here is the Highest Posterior Density:
+
+```{r}
+
+# we make use of the HDInterval package to calculate the Highest Posterior Density Interval
+
+# install.packages("HDInterval")  # remove this comment in case the library "HDInterval" is not installed
+
+library(HDInterval)
+
+hpd_interval <- hdi(qgamma, shape = posterior_shape, rate = posterior_rate, credMass = interval_size)
+
+c(hpd_interval[1], hpd_interval[2])
+
+```
+
+As we can see, the interval returned by the Highest Posterior Density is smaller than the one provided by the Quantile Based. This result comes with no surprise, as the HPD method is the best available option for building credible intervals: in general, the interval they provide is shorter.
+
+```{r}
+
+hpd_result <- c(as.numeric(hpd_interval[1]), as.numeric(hpd_interval[2]))
+
+qb_amplitude <- qb_interval[2] - qb_interval[1]
+
+hpd_amplitude <- hpd_result[2] - hpd_result[1]
+
+hpd_amplitude < qb_amplitude
+
+```
+
+It is important to notice, however, that the difference between the two results is very **small**, and that both methods can be used as a reliable source of information, in this particular case.
+In fact, for distributions that are unimodal and more or less symmetrical, both the HPD and the Quantile Based are expected to provide quite similar results.
+
+
+<br>
+
+### 6 Report your main inferential findings using your posterior distribution of the unknown parameter in terms of **suitable comments on the differences between the prior and the posterior**
+
+<br>
+
+Let's compare the prior and posterior distribution by plotting them together side by side:
+
+```{r}
+
+curve(
+      dgamma(x, shape = prior_shape, rate = prior_rate), 
+      lwd = 3,
+      col = "red",
+      xlab = expression(theta), 
+      ylab = expression(pi(theta)), 
+      main = "Prior and Posterior density functions",
+      ylim = c(0, 1.3),
+      from = 0,
+      to = 8
+)
+
+curve(
+      dgamma(x, shape = posterior_shape, rate = posterior_rate), 
+      lwd = 3,
+      col = "purple",
+      add = T
+)
+
+legend("topright", legend=c("Prior Distribution","Posterior Distribution"), col=c("red", "purple"), pt.cex=2, pch=15 )
+
+abline(v = prior_mean, col="green", lwd=3, lty=2)
+
+axis(1, at = prior_mean, labels = prior_mean)
+
+```
+
+As we can see, the posterior distribution has been "dragged" away from the prior mean of $3.22$. This happened because the data we have in our subset have values that are on average higher than $3.22$. In fact, by having a second look at the number of car accidents, we can see that their mean is actually $3.89$.
+We can also notice how such data has influenced our model so that the Posterior distribution appears to be much more concentrated around its mean, with respect to the Prior.
+
+
+```{r}
+round(mean(mydata$car_accidents), 2)
+
+```
+
+Evidently, our prior rate and shape didn't make our prior distribution much powerful. In other words, we didn't believe so much in our opinion: it took just a little bunch of data (with $n = 19$) to produce this amount of change.
+
+<br>
+
+### 7 (OPTIONAL) Provide a formal definition of the posterior predictive distribution of $Y_{next}|y_1,...,y_n$ and try to compare the posterior predictive distribution for a future observable with the actually observed data
+
+<br>
+
+We can define the Posterior Predictive Distribution as the updated distribution we get as we add new observations (given previous observations) to our model.
+
+In our specific case, given a Poisson likelihood and a gamma conjugate prior, we expect to have a Negative Binomial Posterior Predictive with parameters $\sum_{i = 1}^{n}{y_i}$ and $r + n$:
+
+\begin{equation}
+
+\textrm{Posterior Predictive} \sim NB(s + \sum_{i = 1}^{n}{y_i}, r + n)
+
+\end{equation}
+
+We can show below the passages required to formally get to the Negative Binomial:
+
+\begin{equation}
+
+P(Y_{next}|y_1, ..., y_n)\\
+
+= \int_0^\infty P(Y_{next}|\theta,y_1, ..., y_n)p(\theta|y_1, ..., y_n) \partial \theta \\
+
+=\int_0^\infty P(Y_{next}|\theta)p(\theta|y_1, ..., y_n) \partial \theta \\
+
+=\int_0^\infty \left(\frac{1}{Y_{next}!}\theta^{Y_{next}}e^{-\theta}\right)
+\left(\frac{(r+n)^{s+\sum y_i }}{\Gamma \left(s+\sum y_i\right)}\theta^{s+\sum y_i-1} e^{-(r+n)\theta}\right) \partial \theta\\
+
+=\frac{(r+n)^{s+\sum y_i }}{\Gamma(Y_{next}+1)\Gamma(s+\sum y_i)}
+\int_0^\infty \theta^{s+\sum y_i+Y_{next}-1} e^{-(r+n+1)\theta}\partial \theta\\
+
+=\frac{(r+n)^{s+\sum y_i }}{\Gamma(Y_{next}+1)\Gamma(s+\sum y_i)} \left(\frac{\Gamma(s+\sum y_i+Y_{next})}{(r+n+1)^{s+\sum y_i+Y_{next}}}\right)\\
+
+=\frac{\Gamma(s+\sum y_i+Y_{next})}{\Gamma(s+\sum y_i)\Gamma(Y_{next}+1)} \left( \frac{r+n}{r+n+1}\right)^{s+\sum y_i} \left( \frac{1}{r+n+1}\right)^{Y_{next}}
+
+\end{equation}
+
+As requested, we can now work with the actually observed data (our subset of car accidents) to get our Posterior Predictive Distribution. 
+
+```{r}
+
+n <- 10000
+
+ppd <- rnbinom(n, size = posterior_shape, mu = posterio_mean)
+
+hist(
+  mydata$car_accidents, 
+  col = "green", 
+  probability = T, 
+  main = "Comparison between Observed and Predicted data", 
+  xlim = c(0, 10), 
+  ylim = c(0, 0.35),
+  xlab = "# collisions",
+  ylab = "Probability"
+)
+
+hist(ppd, col = "red", probability = T, add = T)
+
+legend("topright", legend=c("Observed Data","Predicted Data"), col=c("green", "red"), pt.cex=2, pch=15 )
+
+```
+
+As we can see from the comparison in the picture above, the Predicted data are more spread, and include cases where we can observe less than 1 car accident per hour (which is quite realistic). Of course, very little probabilities are assigned to the events of having more than 6 or 7 car accidents per hour. In general, we can say that by relying on the Posterior Predictive Distribution rather than on the observed data we can predict much better the number of collisions per hour happening in Rome. Of course, it is important to keep in mind that we had to feed our model with quite some data to get to this level of neatness (see the size of $n$).
+
+<br>
+
+## **Bulb lifetime**
+
+<br>
+
+### 1 Write the main ingredients of the Bayesian model
+
+<br>
+
+Again, the main ingredients for our Bayesian model will be a likelihood function and a prior.
+However, for this exercise we are requested to work with an exponential function (continuous) rather than with a Poisson (discrete).
+
+<br>
+
+### 2 Choose a conjugate prior distribution π(θ) with mean equal to 0.003 and standard deviation 0.00173.
+
+<br>
+
+As indicated in the description of the Homework, the exponential function can be used to model the lifetimes $Y_{i}$ of light bulbs and will then be taken into account for our likelihood function. After reviewing some theory, we can see that an appropriate conjugate prior for an exponential is a Gamma distribution.
+As indicated in the Homework description, we should then choose a Gamma with mean equal to $0.003$ and standard deviation equal to $0.00173$.
+We know that:
+
+\begin{equation}
+
+E(\theta) = \frac{s}{r} \\
+\sigma(\theta) = \sqrt{Var(\theta)} = \sqrt{\frac{s}{r^{2}}} = \frac{\sqrt{s}}{r}
+
+\end{equation}
+
+where $s = shape$ and $r = rate$.
+Solving the equations above as a system, we can deduce the values for the shape and rate we need for our Gamma distributions:
+
+\begin{equation}
+
+\begin{cases}
+  
+  \frac{s}{r} = 0.003 \rightarrow s = 0.003 * r \\
+  \frac{\sqrt{s}}{r} = 0.00173 \rightarrow \frac{\sqrt{ 0.003 \dot r}}{r} = 0.00173 \rightarrow \frac{0.003}{r} = 0.0000029929 \rightarrow r \approx 1002.3722
+  
+\end{cases} \\
+
+\rightarrow
+
+\begin{cases}
+  
+  s = 3.0071166 \\
+  r = 1002.3722
+  
+\end{cases}
+
+\end{equation}
+
+<br>
+
+### 3 Argue why with this choice you are providing only a vague prior opinion on the average lifetime of the bulb
+
+<br>
+
+
+First, let's plot the density function of our prior distribution:
+
+```{r}
+
+shape <- 3.0071166
+rate <- 1002.3722
+
+curve(
+  dgamma(x, shape = shape, rate = rate),
+  xlab = expression(theta), 
+  ylab = expression(pi(theta)), 
+  col = "red",
+  lwd = 3,
+  main = "Prior distribution density",
+  from = 0,
+  to = 0.01
+)
+
+```
+
+As we can see from the plot, the density is not quite concentrated around the mean, and show a relatively high variance.
+If we want to add some more analytic insight to our analysis we can use the coefficient of variation, as we did in the previous exercise when we wanted to quantify the posterior uncertainty:
+
+```{r}
+
+mu <- 0.003
+
+std <- 0.00173
+
+CV <- std / mu
+
+sprintf("%0.1f%%", CV * 100)
+
+```
+
+Such coefficient provides a standardized measure of dispersion of a probability distribution. In this case, we have a result of $57.7$%. The variation in our prior is indeed high!
+
+Lastly, let's measure the width of a $95$% Highest Posterior Density Interval:
+
+```{r}
+
+hpd <- hdi(qgamma, shape = shape, rate = rate, credMass = interval_size)
+
+curve(
+  dgamma(x, shape = shape, rate = rate),
+  xlab = expression(theta),
+  ylab = expression(pi(theta)),
+  col = "red",
+  lwd = 3,
+  main = "Prior distribution density",
+  from = 0,
+  to = 0.01
+)
+
+abline(v = hpd[1], col="green", lwd=3, lty=2)
+axis(1, at = hpd[1], labels = "0.0003", pos = 2)
+
+abline(v = hpd[2], col="purple", lwd=3, lty=2)
+axis(1, at = hpd[2], labels = round(hpd[2], 4), pos = 2)
+
+```
+
+We notice how the lower and upper bounds of the interval are relatively distant from each other, hence confirming a quite high level of "vagueness" in our prior belief. In fact, as stated in **[John K. Kruschke, "Bayesian Approaches to Testing a Point (“Null”) Hypothesis", 2015]**, "[...] the width of the HDI is another way of measuring uncertainty of beliefs. If the HDI is wide, then beliefs are uncertain. If the HDI is narrow, then beliefs are relatively certain.".
+
+<br>
+
+### 4 Show that this setup fits into the framework of the conjugate Bayesian analysis
+
+<br>
+
+The fact of not having a "strong" prior opinion on the lifetime of light bulbs do not affect the setup of our Bayesian model, nor the conjugate analysis we intend to pursue.
+
+Assuming that all the $Y_{i} = y_{i}$ can be treated as IID random variables (exponential), we can write the likelihood function simply as:
+
+\begin{equation}
+
+L(Y_1 = y_1, ...,Y_n = y_n|\theta) = \prod_{i = 1}^{n}{P(y_i|\theta}) = \prod_{i = 1}^{n}{\theta e^{-\theta y_i}} = \theta^n e^{-\theta \sum_{i = 1}^{n} y_i}\\
+
+\end{equation}
+
+The prior distribution can be written as follows (remember, we chose again the Gamma distribution as our prior):
+
+\begin{equation}
+
+\pi(\theta) = \frac{r^s}{\Gamma(s)} \theta^{s-1} e^{-r\theta}\\
+
+\end{equation}
+
+Then, if we omit the proportionality constant, we can say that the posterior distribution is proportional to (we omit some of the passages shown in class):
+
+\begin{equation}
+
+\pi(\theta | y_1, ...,y_n) \propto \theta^{(n+s-1)} e^{-\theta \left(\sum_{i = 1}^{n}{y_i} + r\right)} = \theta^{s^* -1} e^{-\theta r^*} \\
+
+\end{equation}
+
+where in the last passage we have:
+
+\begin{equation}
+
+s^{*} = n + s \\
+r^{*} = \sum_{i = 1}^{n}{y_i} + r
+
+\end{equation}
+
+Notice the difference with the previous exercise, where instead we had:
+
+\begin{equation}
+
+s^{*} = s + \sum_{i = 1}^{n}{y_i}\\
+
+r^{*} = r + n
+
+\end{equation}
+
+So the posterior distribution is properly described by a Gamma with $shape = s^{*} = n + s$ and $rate = r^{*} = \sum_{i = 1}^{n}{y_i} + r$. Everything works exactly as shown in class.
+
+<br>
+
+### 5 Based on the information gathered on the 20 bulbs, what can you say about the main characteristics of the lifetime of yor innovative bulb? Argue that we have learnt some relevant information about the θ parameter and this can be converted into relevant information about 1/θ
+
+<br>
+
+First, we need to define the values for $s^{*}$ and $r^{*}$:
+
+```{r}
+
+lb_data <- c(1, 13, 27, 43, 73, 75, 154, 196, 220, 297, 344, 610, 734, 783, 796, 845, 859, 992, 1066, 1471)
+
+n <- length(lb_data)
+
+posterior_shape = shape + n
+posterior_rate = rate + sum(lb_data)
+
+posterior_shape
+posterior_rate
+
+```
+
+At this point we are already able to provide some interesting statistical measures:
+
+```{r}
+
+posterior_mean <- posterior_shape / posterior_rate
+posterior_mode <- qgamma(0.5, shape = posterior_shape, rate = posterior_rate)
+posterior_median <- (posterior_shape - 1) / posterior_rate
+posterior_variance <- posterior_shape / (posterior_rate^2)
+posterior_std <- sqrt(posterior_variance)
+
+posterior_mean
+posterior_mode
+posterior_median
+posterior_std
+
+```
+
+Let's provide a comparison between the prior and the posterior densities:
+
+```{r}
+
+curve(
+  dgamma(x, shape = shape, rate = rate),
+  col="red",
+  lwd=3,
+  xlab=expression(theta)
+  ,ylab=expression(pi(theta)),
+  ylim=c(0,920),
+  xlim=c(0,0.008),
+  main="Comparison between Prior and Posterior density"
+)
+
+curve(
+  dgamma(x, shape = posterior_shape, rate = posterior_rate),
+  col="purple",
+  lwd=3,
+  add=T
+)
+
+legend(
+  "topright", 
+  legend=c("Prior density", "Posterior density"), 
+  col=c("red", "purple"), 
+  pt.cex=2, 
+  pch=15 
+)
+
+abline(v = mu, col="red", lwd=3, lty=2)
+axis(1, at = mu, labels = round(mu, 4), pos = 2)
+
+abline(v = posterior_mean, col="purple", lwd=3, lty=2)
+axis(1, at = posterior_mean, labels = round(posterior_mean, 4), pos = 2)
+
+```
+
+We can see how the posterior distribution is much more symmetrical with respect to the prior, and more importantly we can see how it is more concentrated around its mean, showing a much lower degree of uncertainty with respect to the prior.
+We can also notice that the mean for the posterior is approximately $0.0022$.
+
+With the posterior mean in hand, we can now calculate the average lifetime of our light bulbs, remembering that, as stated in the current question, the mean of an exponential is equal to $1 / \theta$, where $\theta$ is our posterior mean:
+
+```{r}
+
+lb_mean <- 1 / posterior_mean
+
+lb_mean
+
+```
+We can conclude that the average lifetime of our innovative light bulbs is a little less than $461$ hours.
+
+<br>
+
+### 6 However, your boss would be interested in the probability that the average bulb lifetime 1/θ exceeds 550 hours. What can you say about that after observing the data? Provide her with a meaningful Bayesian answer
+
+<br>
+
+Before observing any data we would have looked for:
+
+\begin{equation}
+
+P(\frac{1}{\theta} > 550)
+
+\end{equation}
+
+After having observed some data, we are now able to make use of the newly acquired knowledge to perfection a little our calculations by applying the following conditioning:
+
+\begin{equation}
+
+P(\frac{1}{\theta} > 550 | y_{1}, ..., y_{n})
+
+\end{equation}
+
+Since we know that the posterior distribution is a Gamma with $s = 23.00712$ and $r = 10601.37$, we can simply use its known CDF to calculate the desired probability.
+However, in that context, we need to go back from $1 / \theta$ to $\theta$, hence we need:
+
+\begin{equation}
+
+P(\frac{1}{\theta} > 550 | y_{1}, ..., y_{n}) = P(\theta < \frac{1}{550} | y_{1}, ..., y_{n})
+
+\end{equation}
+
+Now we know up to which value of $\theta$ we need to integrate the CDF:
+
+```{r}
+
+theta <- 1 / 550
+
+prob <- pgamma(theta, shape = posterior_shape, rate = posterior_rate)
+
+prob
+
+```
+
+So, the probability that the average lifetime of our new light bulbs exceeds 550 hours is $0.2254$.
+
+<br>
