@@ -1,3 +1,3 @@
 # Bayesian Statistics
 
-This repository includes all the projects carried out for the **Statistical Methods in Data Science - Part II** course at *La Sapienza University of Rome*
+This repository includes all my projects for **Statistical Methods in Data Science - Part II** at *La Sapienza University of Rome*
